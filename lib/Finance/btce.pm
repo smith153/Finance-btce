@@ -84,7 +84,13 @@ sub new
 	my ($class, $args) = @_;
 	if($args->{'apikey'} && $args->{'secret'})
 	{
-		$args->{mech} = WWW::Mechanize->new(stack_depth => 0, agent => "Linux Mozilla");
+		$args->{mech} = WWW::Mechanize->new(
+			stack_depth => 0, 
+			agent => "Linux Mozilla",
+			timeout => 4,
+			cookie_jar => undef,
+		);
+
 		$args->{json} = JSON->new();
 		$args->{nonce} = _nonce_closure();
 	}
