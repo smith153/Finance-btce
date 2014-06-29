@@ -1,13 +1,10 @@
 package Finance::btce;
 
 use 5.012004;
-use strict;
-use warnings;
 use JSON;
 use Carp qw(croak carp);
 use Digest::SHA qw( hmac_sha512_hex);
-use WWW::Mechanize;
-use Data::Dumper;
+use HTTP::Tiny;
 
 require Exporter;
 
@@ -26,53 +23,56 @@ our @EXPORT_OK = ( @{ $EXPORT_TAGS{'all'} } );
 
 our @EXPORT = qw();
 
-our $VERSION = '0.021';
+our $VERSION = '0.04';
 
 our $post_url = "https://btc-e.com/tapi";
 our $ws_url = "https://btc-e.com/api/2/";
 
 sub BTCtoUSD
 {
-	my $browser = WWW::Mechanize->new(stack_depth => 0, agent => "Linux Mozilla");
+	my $browser = HTTP::Tiny->new();
 	my $json = JSON->new->allow_nonref;
 	my $ticker;
-	eval { $browser->get("$ws_url" . "btc_usd/ticker"); }; carp $@ if $@;
-	if(not $browser->success){
+	my $res;
+	eval { $res = $browser->get("$ws_url" . "btc_usd/ticker"); }; carp $@ if $@;
+	if(not $res->{success}){
 		carp "No Response received.\n";
 		return undef;
 	}
 
-	eval { $ticker = $json->decode($browser->content)->{ticker}; }; carp $@ if $@;
+	eval { $ticker = $json->decode($res->{content})->{ticker}; }; carp $@ if $@;
 	return $ticker;
 }
 
 sub LTCtoBTC
 {
-	my $browser = WWW::Mechanize->new(stack_depth => 0, agent => "Linux Mozilla");
+	my $browser = HTTP::Tiny->new();
 	my $json = JSON->new->allow_nonref;
 	my $ticker;
-	eval { $browser->get("$ws_url" . "ltc_btc/ticker"); }; carp $@ if $@;
-	if(not $browser->success){
+	my $res;
+	eval { $res = $browser->get("$ws_url" . "ltc_btc/ticker"); }; carp $@ if $@;
+	if(not $res->{success}){
 		carp "No Response received.\n";
 		return undef;
 	}
 
-	eval { $ticker = $json->decode($browser->content)->{ticker}; }; carp $@ if $@;
+	eval { $ticker = $json->decode($res->{content})->{ticker}; }; carp $@ if $@;
 	return $ticker;
 }
 
 sub LTCtoUSD
 {
-	my $browser = WWW::Mechanize->new(stack_depth => 0, agent => "Linux Mozilla");
+	my $browser = HTTP::Tiny->new();
 	my $json = JSON->new->allow_nonref;
 	my $ticker;
-	eval { $browser->get("$ws_url" . "ltc_usd/ticker"); }; carp $@ if $@;
-	if(not $browser->success){
+	my $res;
+	eval { $res = $browser->get("$ws_url" . "ltc_usd/ticker"); }; carp $@ if $@;
+	if(not $res->{success}){
 		carp "No Response received.\n";
 		return undef;
 	}
 
-	eval { $ticker = $json->decode($browser->content)->{ticker}; }; carp $@ if $@;
+	eval { $ticker = $json->decode($res->{content})->{ticker}; }; carp $@ if $@;
 	return $ticker;
 }
 
@@ -84,13 +84,7 @@ sub new
 	my ($class, $args) = @_;
 	if($args->{'apikey'} && $args->{'secret'})
 	{
-		$args->{mech} = WWW::Mechanize->new(
-			stack_depth => 0, 
-			agent => "Linux Mozilla",
-			timeout => 4,
-			cookie_jar => undef,
-		);
-
+		$args->{mech} = HTTP::Tiny->new( timeout => 4);
 		$args->{json} = JSON->new();
 		$args->{nonce} = _nonce_closure();
 	}
@@ -106,17 +100,18 @@ sub getTicker
 {
 	my ($self, $pair) = @_;
 	my $ticker;
+	my $res;
 	unless($pair){
 		carp "Must pass valid currency pair. Ex: btc_usd\n";
 		return undef;
 	}
 	my $url = $ws_url . "$pair/" . "ticker";
-	eval { $self->_mech->get($url);}; carp $@ if $@;
-	if(not $self->_mech->success() ){
-		carp "No success getting data from  $url\n";
+	eval { $res = $self->_mech->get($url);}; carp $@ if $@;
+	if(not $res->{success} ){
+		carp "No success getting data from  $url $res->{reason} $res->{content}\n";
 		return undef;
 	}
-	eval { $ticker = $self->_json->decode($self->_mech->content())->{ticker}; }; carp $@ if $@;
+	eval { $ticker = $self->_json->decode($res->{content})->{ticker}; }; carp $@ if $@;
 	return $ticker;
 }
 
@@ -126,14 +121,16 @@ sub getInfo
 	my ($self) = @_;
 	my $nonce = $self->_get_nonce();
 	my $data = "method=getInfo&nonce=$nonce";
-	$self->_mech->add_header('Key' => $self->_apikey);
-	$self->_mech->add_header('Sign' => $self->_hash($data) );
-	eval {$self->_mech->post($post_url, ['method' => 'getInfo', 'nonce' => $nonce]); }; carp $@ if $@;
-	if(not $self->_mech->success() ){
-		carp "No success posting data to $post_url\n";
+	my $res;
+	my $headers = {headers => {'Key' => $self->_apikey, 'Sign' => $self->_hash($data)} };
+
+	eval {$res = $self->_mech->post_form($post_url, ['method' => 'getInfo', 'nonce' => $nonce], $headers); }; carp $@ if $@;
+	if(not $res->{success} ){
+		carp "No success posting date to $post_url: $res->{reason} $res->{content}\n";
 		return undef;
 	}
-	my $ref =  $self->_json->decode($self->_mech->content());
+	my $ref =  $self->_json->decode($res->{content});
+
 	if($ref->{success} != 1){
 		carp "Api did not return 'success : 1' from post to $post_url\n";
 		return undef;
@@ -147,14 +144,15 @@ sub activeOrders
   	my ($self) = @_;
 	my $nonce = $self->_get_nonce();
 	my $data = "method=ActiveOrders&nonce=$nonce";
-	$self->_mech->add_header('Key' => $self->_apikey);
-	$self->_mech->add_header('Sign' => $self->_hash($data) );
-	eval {$self->_mech->post($post_url, ['method' => 'ActiveOrders', 'nonce' => $nonce]); }; carp $@ if $@;
-	if(not $self->_mech->success() ){
+	my $res;
+	my $headers = {headers => {'Key' => $self->_apikey, 'Sign' => $self->_hash($data)} };
+
+	eval {$res = $self->_mech->post_form($post_url, ['method' => 'ActiveOrders', 'nonce' => $nonce], $headers); }; carp $@ if $@;
+	if(not $res->{success} ){
 		carp "No success posting data to $post_url\n";
 		return undef;
 	}
-	my $ref =  $self->_json->decode($self->_mech->content());
+	my $ref =  $self->_json->decode($res->{content});
 	if($ref->{success} != 1 and $ref->{error} ne "no orders"){
 		carp "Api did not return 'success : 1' from post to $post_url\n" .
 			"Error was: $ref->{error}\n";
@@ -170,19 +168,20 @@ sub trade
 	my ($self, $pair, $type, $rate, $amount) = @_;
 	my $nonce = $self->_get_nonce();
 	my $data = "method=Trade&nonce=$nonce&pair=$pair&type=$type&rate=$rate&amount=$amount";
+	my $res;
 	unless($pair and $type and $rate and $amount){
 		carp "Must pass valid currency pair (ex.btc_usd), type (buy or sell), rate and amount.\n";
 		return undef;
 	}
-	$self->_mech->add_header('Key' => $self->_apikey);
-	$self->_mech->add_header('Sign' => $self->_hash($data) );
-	eval { $self->_mech->post($post_url, ['method' => 'Trade', 'nonce' => $nonce, 'pair' => $pair, 
-		'type' => $type, 'rate' => $rate, 'amount' => $amount]); }; carp $@ if $@;
-	if(not $self->_mech->success() ){
+	my $headers = {headers => {'Key' => $self->_apikey, 'Sign' => $self->_hash($data)} };
+	
+	eval { $res = $self->_mech->post_form($post_url, ['method' => 'Trade', 'nonce' => $nonce, 'pair' => $pair, 
+		'type' => $type, 'rate' => $rate, 'amount' => $amount], $headers); }; carp $@ if $@;
+	if(not $res->{success} ){
 		carp "No success posting data to $post_url\n";
 		return undef;
 	}
-	my $ref =  $self->_json->decode($self->_mech->content());
+	my $ref =  $self->_json->decode($res->{content});
 
 	if($ref->{success} != 1){
 		carp "Api did not return 'success : 1' from post to $post_url\n" .
@@ -199,14 +198,15 @@ sub cancelOrder
 	my ($self,$order_id) = @_;
 	my $nonce = $self->_get_nonce();
 	my $data = "method=CancelOrder&nonce=$nonce&order_id=$order_id";
-	$self->_mech->add_header('Key' => $self->_apikey);
-	$self->_mech->add_header('Sign' => $self->_hash($data) );
-	eval { $self->_mech->post($post_url, ['method' => 'CancelOrder', 'nonce' => $nonce, 'order_id' => $order_id]); }; carp $@ if $@;
-	if(not $self->_mech->success() ){
+	my $res;
+	my $headers = {headers => {'Key' => $self->_apikey, 'Sign' => $self->_hash($data)} };
+
+	eval { $res = $self->_mech->post_form($post_url, ['method' => 'CancelOrder', 'nonce' => $nonce, 'order_id' => $order_id], $headers); }; carp $@ if $@;
+	if(not $res->{success} ){
 		carp "No success posting data to $post_url\n";
 		return undef;
 	}
-	my $ref =  $self->_json->decode($self->_mech->content());
+	my $ref =  $self->_json->decode($res->{content});
 	if($ref->{success} != 1){
 		carp "Api did not return 'success : 1' from post to $post_url\n" .
 			"Error was: $ref->{error}\n";
